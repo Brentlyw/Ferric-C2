@@ -1,6 +1,6 @@
 # Ferric-C2
 
-**Ferric-C2** is a simple Rust/Python-based Command and Control (C2) framework designed for educational purposes. In Ferric's current stage, it provides foundational function necessary for basic C2 operations. While the framework is operational, it is still under active development and lacks some advanced features until future updates.
+**Ferric-C2** is a simple Rust/Python-based Command and Control (C2) framework designed for ease of use. It is still under active development and lacks some advanced features until future updates.
 
 ## ⚠️ Disclaimer
 
