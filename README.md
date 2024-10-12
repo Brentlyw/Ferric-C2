@@ -8,7 +8,8 @@
 
 ## 🚧 Project Status
 
-**Pre-Alpha**: Ferric-C2 is in its early stages of development. While core features are functional, the framework may undergo significant changes. Contributions and feedback are welcome! :-)
+**Pre-Alpha**: Ferric-C2 is in its early stages of development. While core features are functional, the framework may undergo significant changes. Contributions and feedback are welcome! :-)  
+**Detections**: https://kleenscan.com/scan_result/95909b36b6536d5631df35f23deceb9e0b4a563e3a653aba44814d3b40e89c96
 
 ## 🛠 Features
 
