@@ -22,6 +22,9 @@
 - **Remote Shell Command**
   - Execute any PowerShell command on connected clients remotely, enabling comprehensive control.
 
+- **Remote screen capture**
+  - Remotely capture and display the screen (2 FPS max).
+
 - **Remote File Manager (Interactive)**
   - **Download, Upload, Rename, Execute, Delete**: Manage files on remote systems through an interactive file browser interface within the WebUI.
 
